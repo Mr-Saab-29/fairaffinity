@@ -52,4 +52,27 @@ It uses multiple datasets (clients, products, transactions, stores, stocks) to c
 
 ---
 
-## 📂 Project Structure
+## 🛡 Fairness Considerations
+We ensure:
+- Balanced exposure across demographic groups.
+- Transparent trade-offs between relevance and fairness.
+- Clear visualizations of fairness metrics for stakeholders.
+
+## 🚀 Getting Started
+
+1. **Clone the repository**
+   ```bash
+   git clone git@github.com:YOUR_USERNAME/fairaffinity.git
+   cd fairaffinity
+
+2. Setup Environment
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+
+3. Install dependencies
+   ```bash
+   pip install -r requirements.txt
+
+📜 License
+This project is for educational and demonstration purposes.
