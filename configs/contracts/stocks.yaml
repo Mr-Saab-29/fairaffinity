@@ -1,0 +1,6 @@
+name: stocks
+primary_key: [StoreCountry, ProductID]
+columns:
+  StoreCountry: {type: string,  required: true}
+  ProductID:    {type: int64,   required: true}
+  Quantity:     {type: float64, required: false}

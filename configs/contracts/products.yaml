@@ -1,0 +1,8 @@
+name: products
+primary_key: ProductID
+columns:
+  ProductID:     {type: int64,  required: true}
+  Category:      {type: string, required: false}
+  FamilyLevel1:  {type: string, required: false}
+  FamilyLevel2:  {type: string, required: false}
+  Universe:      {type: string, required: false}

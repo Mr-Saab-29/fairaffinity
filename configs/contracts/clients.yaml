@@ -1,0 +1,13 @@
+name: clients
+primary_key: ClientID
+columns:
+  ClientID:         {type: int64,    required: true}
+  ClientSegment:    {type: string,   required: false}
+  ClientCountry:    {type: string,   required: false}
+  ClientOptINEmail: {type: int64,    required: false}
+  ClientOptINPhone: {type: int64,    required: false}
+  ClientGender:     {type: string,   required: false}
+  Age:              {type: float64,  required: false}
+value_normalization:
+  ClientGender:
+    map: {"M": "Male", "F": "Female", "male": "Male", "female": "Female"}

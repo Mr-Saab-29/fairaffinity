@@ -1,0 +1,10 @@
+nname: transactions
+primary_key: null
+columns:
+  ClientID:             {type: "int64",           required: true}
+  ProductID:            {type: "int64",           required: true}
+  SaleTransactionDate:  {type: "datetime64[ns]",  required: true}
+  StoreID:              {type: "int64",           required: true}
+  Quantity:             {type: "int64",           required: false}
+  SalesNetAmountEuro:   {type: "float64",         required: false}
+

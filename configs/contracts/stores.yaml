@@ -1,0 +1,5 @@
+name: stores
+primary_key: StoreID
+columns:
+  StoreID:       {type: int64,  required: true}
+  StoreCountry:  {type: string, required: false}
