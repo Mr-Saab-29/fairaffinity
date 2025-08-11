@@ -80,6 +80,29 @@ def normalize_values(df: pd.DataFrame, contract: Dict[str, Any]) -> pd.DataFrame
             df[field] = df[field].map(cfg["map"]).fillna(df[field])
     return df
 
+def _valid_product_ids():
+    """
+    Return a set of valid ProductID from the canonical 'products' table.
+    Prefer the already-written interim parquet; if missing, fall back to products.csv.
+    """
+    prod_parquet = INTERIM / "products.parquet"
+    if prod_parquet.exists():
+        try:
+            s = pd.read_parquet(prod_parquet)["ProductID"].dropna().astype("int64")
+            return set(s.unique())
+        except Exception:
+            pass
+
+    # Fallback: read raw csv with contract if parquet not ready
+    prod_csv = RAW / "products.csv"
+    prod_yml = CONTRACTS / "products.yaml"
+    if prod_csv.exists() and prod_yml.exists():
+        from pandas import read_csv
+        prodf = read_csv(prod_csv, usecols=["ProductID"])
+        return set(pd.to_numeric(prodf["ProductID"], errors="coerce").dropna().astype("int64").unique())
+
+    # Last resort: empty set (no filtering)
+    return None
 
 def ingest_one(name: str, csv_name: str, yml_name: str, persist: bool) -> None:
     csv_path = RAW / csv_name
@@ -111,6 +134,17 @@ def ingest_one(name: str, csv_name: str, yml_name: str, persist: bool) -> None:
     if errs:
         print(f"[ERROR] {name}:\n - " + "\n - ".join(errs))
         return
+    
+    # Filter stocks to Valid ProductID present in products
+    if name == "stocks":
+        valid_pids = _valid_product_ids()
+        if valid_pids is not None:
+            before = len(df)
+            # coerce ProductID just in case
+            df["ProductID"] = pd.to_numeric(df["ProductID"], errors="coerce").astype("Int64")
+            df = df[df["ProductID"].isin(valid_pids)].copy()
+            removed = before - len(df)
+            print(f"[clean] stocks: filtered {removed:,} rows with ProductID not in products")
 
     # success
     print(f"[OK] {name}: rows={len(df):,}, cols={len(df.columns)}")
