@@ -3,21 +3,13 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import time
+from src.utils.dates import apply_cutoff
+from src.utils.io_helpers import load_interactions
 
 ROOT = Path(__file__).resolve().parents[2]
 PROC = ROOT / "data" / "processed"
 OUT  = PROC
 
-def _apply_cutoff(df: pd.DataFrame, cutoff: float | None) -> pd.DataFrame:
-    """ 
-    Filter transactions before the cutoff date. (if given)
-    """
-    if cutoff:
-        cutoff_ts = pd.to_datetime(cutoff, errors='coerce')
-        if pd.isna(cutoff_ts):
-            raise ValueError(f"Invalid cutoff date: {cutoff}")
-        return df[df['txn_date'] < cutoff_ts].copy()
-    return df
 
 def mode_safe(series: pd.Series) -> pd.Series:
     """
@@ -41,7 +33,7 @@ def row_entropy(arr: np.ndarray) -> np.ndarray:
 def build_user_features(cutoff: str | None = None, sample_frac: float | None = None) -> pd.DataFrame:
     t0 = time.perf_counter()
     print("[user] loading interactions…")
-    df = pd.read_parquet(PROC / "interactions.parquet")
+    df = load_interactions()
 
     # ensure datetime
     df["txn_date"] = (
@@ -53,7 +45,7 @@ def build_user_features(cutoff: str | None = None, sample_frac: float | None = N
         df = df.sample(frac=sample_frac, random_state=42).reset_index(drop=True)
         print(f"[user] sampled {sample_frac:.2%} -> rows={len(df):,}")
 
-    df = _apply_cutoff(df, cutoff)
+    df = apply_cutoff(df, cutoff)
     if df.empty:
         raise ValueError("No data before cutoff; choose a later cutoff.")
 

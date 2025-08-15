@@ -1,0 +1,71 @@
+user_features:
+  keys: [ClientID]
+  columns:
+    txns: count of transactions
+    qty_sum: total quantity
+    eur_sum: total spend (EUR)
+    recency_days: days since last txn
+    basket_mean: mean spend per txn
+    basket_median: median spend per txn
+    n_products: distinct products
+    n_categories: distinct categories
+    n_stores: distinct stores
+    pref_store_country: most frequent store country
+    pref_client_country: most frequent client country
+    top_category: most frequent category
+    top_family_lvl1: most frequent family L1
+    month_entropy: dispersion across months
+    dow_entropy: dispersion across days of week
+    customer_age_days: days between first and last txn
+
+product_features:
+  keys: [ProductID]
+  columns:
+    txns: global txn count
+    buyers: unique clients
+    qty_sum: total quantity
+    eur_sum: total spend (EUR)
+    eur_per_qty: spend per unit
+    product_age_days: last-first txn span (days)
+    days_since_sold: days since last sale
+    qty_30d: trailing 30d quantity
+    eur_30d: trailing 30d spend
+    txns_30d: trailing 30d transactions
+    buyers_30d: trailing 30d unique buyers
+    qty_60d: trailing 60d quantity
+    eur_60d: trailing 60d spend
+    txns_60d: trailing 60d transactions
+    buyers_60d: trailing 60d unique buyers
+
+user_rfm:
+  keys: [ClientID]
+  columns:
+    freq_txns: transaction count
+    qty_sum: total quantity
+    eur_sum: total spend
+    recency_days: days since last txn
+    tenure_days: span between first and last txn
+    avg_basket_eur: mean basket value
+
+client_product_recency:
+  keys: [ClientID, ProductID]
+  columns:
+    cp_txns: pair-level txn count
+    cp_qty_sum: pair-level qty sum
+    cp_eur_sum: pair-level spend sum
+    days_since_last_cp: recency for the pair
+    cp_tenure_days: span for the pair
+
+category_features:
+  keys: [ProductID]
+  columns:
+    Category: leaf category
+    FamilyLevel1: parent category
+    FamilyLevel2: sub-family
+    Universe: product universe
+    cat_txns: category txn count
+    cat_qty: category quantity
+    cat_eur: category spend
+    cat_buyers: unique buyers for category
+    cat_txn_share: share of all txns
+    cat_eur_per_txn: avg spend per txn in category

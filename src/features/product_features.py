@@ -2,7 +2,8 @@ from __future__ import annotations
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from src.features.user_features import _apply_cutoff
+from src.utils.dates import apply_cutoff
+from src.utils.io_helpers import load_interactions
 
 ROOT = Path(__file__).resolve().parents[2]
 PROC = ROOT / "data" / "processed"
@@ -18,13 +19,9 @@ def build_product_features(cutoff: str| None = None, velocity_days: tuple[int, .
     Returns:
         pd.DataFrame: Dataframe with product features
     """
-    df = pd.read_parquet(PROC / "interactions.parquet")
-    df["txn_date"] = (
-    pd.to_datetime(df["txn_date"], errors="coerce", utc=True)
-      .dt.tz_localize(None)
-    )
+    df = load_interactions()
 
-    df = _apply_cutoff(df, cutoff)
+    df = apply_cutoff(df, cutoff)
     if df.empty:
         raise ValueError(" No data before cutoff; choose a later cutoff date")
     
@@ -82,7 +79,7 @@ def build_product_features(cutoff: str| None = None, velocity_days: tuple[int, .
     filename = (
         "product_features.parquet"
         if not cutoff
-        else f'product_features_ {pd.to_datetime(cutoff).date()}.parquet'
+        else f'product_features_{pd.to_datetime(cutoff).date()}.parquet'
     )
 
     out_path = OUT / filename

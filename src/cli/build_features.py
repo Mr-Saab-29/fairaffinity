@@ -1,6 +1,8 @@
 from __future__ import annotations
 from src.features.product_features import build_product_features
 from src.features.user_features import build_user_features
+from src.features.rfm_features import build_user_rfm, build_client_product_recency
+from src.features.category_features import build_category_features
 
 def build_all_features(cutoff: str | None = None) -> None:
     """Build all features for the project.
@@ -13,6 +15,15 @@ def build_all_features(cutoff: str | None = None) -> None:
     
     print("Building product features...")
     build_product_features(cutoff)
+
+    print("Building RFM Features...")
+    build_user_rfm(cutoff)
+
+    print("Building Client Product Recency Features...")
+    build_client_product_recency(cutoff)
+
+    print("Building Category Features...")
+    build_category_features(cutoff)
 
     print("All features built successfully!")
 
