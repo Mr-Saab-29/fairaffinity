@@ -130,11 +130,6 @@ def run_feature_selection() -> None:
     best_k = int(curve.loc[curve['pr_auc_mean'].idxmax(), 'k'])
     print(f"[info] best k by PR-AUC: {best_k}")
 
-    # 6) plot
-    import matplotlib
-    matplotlib.use("Agg")  # headless save
-    import matplotlib.pyplot as plt
-
     plt.figure(figsize=(8, 6))
     plt.plot(curve["k"], curve["pr_auc_mean"], marker="o", label="PR-AUC")
     plt.plot(curve["k"], curve["roc_auc_mean"], marker="s", label="ROC-AUC")
