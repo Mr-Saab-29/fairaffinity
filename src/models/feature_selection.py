@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import List, Tuple
+import json
 
 import pandas as pd
 import numpy as np
@@ -129,6 +130,8 @@ def run_feature_selection() -> None:
     # 5) best k (saved for downstream use if needed)
     best_k = int(curve.loc[curve['pr_auc_mean'].idxmax(), 'k'])
     print(f"[info] best k by PR-AUC: {best_k}")
+    best_meta = {"best_k": best_k, "metric": "pr_auc_mean"} 
+    (REPORTS / "feature_selection_best_k.json").write_text(json.dumps(best_meta, indent=2))
 
     plt.figure(figsize=(8, 6))
     plt.plot(curve["k"], curve["pr_auc_mean"], marker="o", label="PR-AUC")

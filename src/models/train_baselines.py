@@ -110,6 +110,51 @@ def scale_pos_weight(y: np.ndarray) -> float:
         return 1.0
     return float(neg / pos)
 
+def _load_ranked_features() -> List[str] | None:
+    " Return ranked feature names from feature selection script"
+    path = REPORTS / "feature_importance_lgbm.csv"
+    if not path.exists():
+        return None
+    df = pd.read_csv(path)
+    if "feature" not in df.columns or df.empty:
+        return None
+    return df["feature"].to_list()
+
+def _load_best_k(default: int | None = None) -> int | None:
+    "Return the best_k featrures if present, else default"
+    path = REPORTS / "feature_selection_best_k.json"
+    if not path.exists():
+        return default
+    try:
+        meta = json.loads(path.read_text())
+        k = int(meta.get("best_k", 0))
+        return k if k > 0 else default
+    except Exception:
+        return default
+
+def _numeric_feature_columns(df: pd.DataFrame) -> list[str]:
+    """Fallback: choose numeric columns except IDs/targets/date."""
+    drop = {
+        "ClientID", "ProductID", "StoreID",
+        "label", "target",
+        "SaleTransactionDate", "txn_date",
+    }
+    return [c for c in df.columns if c not in drop and pd.api.types.is_numeric_dtype(df[c])]
+
+def _select_features(df: pd.DataFrame) -> list[str]:
+    """
+    Main entry: prefer ranked top-k if available; else all numeric.
+    """
+    ranked = _load_ranked_features()
+    best_k = _load_best_k()
+    if ranked and best_k:
+        # only keep columns that actually exist in df
+        return [c for c in ranked[:best_k] if c in df.columns]
+    # Fallbacks
+    if ranked:
+        return [c for c in ranked if c in df.columns]
+    return _numeric_feature_columns(df)
+
 # -------------------------------------------------------------------------
 # Model Factory
 # -------------------------------------------------------------------------
@@ -184,6 +229,53 @@ def make_lgbm_pipeline(num_cols : List[str], y_train : np.ndarray) -> Pipeline:
     return Pipeline([("prep", pre), ("clf", clf)])
 
 # -------------------------------------------------------------------------
+# Baseline Registry and Helper Functions
+# -------------------------------------------------------------------------
+
+def get_feature_selector():
+    "Expose the same column selector used for training"
+    return _select_features
+
+MODEL_REGISTRY = {
+    "logreg" : make_log_reg_pipeline,
+    "random_forest" : make_rf_pipeline,
+    "xgboost" : make_xgb_pipeline,
+    "lightgbm" : make_lgbm_pipeline,
+}
+
+def get_model_names() -> List[str]:
+    "Return available model names."
+    return list(MODEL_REGISTRY.keys())
+
+def make_pipeline_by_name(name: str, num_cols: list[str], y_train=None):
+    """
+    Build a pipeline by name using the same constructors as baselines.
+    xgboost/lightgbm accept y_train for class-weighting; others ignore it.
+    """
+    if name not in MODEL_REGISTRY:
+        raise ValueError(f"Unknown model: {name}")
+    builder = MODEL_REGISTRY[name]
+    try:
+        # prefer signature (num_cols, y_train) when provided
+        return builder(num_cols, y_train)  # xgb/lgbm path
+    except TypeError:
+        # fall back to (num_cols) for models that don't take y_train
+        return builder(num_cols)
+
+def read_baseline_leaderboard(report_path: Path) -> pd.DataFrame:
+    """Read the CSV leaderboard written by this script."""
+    if not report_path.exists():
+        raise FileNotFoundError(f"Missing leaderboard CSV: {report_path}")
+    return pd.read_csv(report_path)
+
+def top_n_models_from_leaderboard(report_path: Path, metric: str = "pr_auc", top_n: int = 2) -> list[str]:
+    """Pick the top-N model names by a metric from the leaderboard CSV."""
+    df = read_baseline_leaderboard(report_path)
+    if "model" not in df.columns or metric not in df.columns:
+        raise ValueError(f"{report_path} must have columns ['model', '{metric}']")
+    return df.sort_values(metric, ascending=False)["model"].head(top_n).tolist()
+
+# -------------------------------------------------------------------------
 # Train / Evaluation Loop
 # -------------------------------------------------------------------------
 
@@ -254,8 +346,8 @@ def main() -> None:
     test = load_split("test")
 
     # Features/labels
-    feat_cols = pick_feature_columns(train)
-    X_tr, y_tr, _ = split_xy(train, feat_cols)
+    feat_cols = _select_features(train)
+    X_tr, y_tr, g_tr = split_xy(train, feat_cols)
     X_va, y_va, g_va = split_xy(val, feat_cols)
     X_te, y_te, g_te = split_xy(test, feat_cols)
 
