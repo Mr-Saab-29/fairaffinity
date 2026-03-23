@@ -19,6 +19,12 @@ from src.models.train_baselines import (
     eval_metrics,
     split_xy,
 )
+from src.fairness.training import (
+    attach_client_groups,
+    compute_sample_weights,
+    compute_sample_weights_from_groups,
+    load_client_groups,
+)
 
 # -----------------------------------------------------------------------
 # Paths
@@ -98,6 +104,9 @@ def _cv_objective(
         groups : np.ndarray,
         metric: str = "pr_auc",
         random_state: int = 42,
+        fairness_group_values: np.ndarray | None = None,
+        fairness_groups: list[str] | None = None,
+        fairness_others_weight: float = 1.0,
 ) -> float:
     """ GroupKFold CV objective for Optuna.
     metric is one of {'pr_auc', 'roc_auc', 'map@10', 'recall@10'}"""
@@ -115,7 +124,15 @@ def _cv_objective(
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
         g_va = groups[val_idx]
-        pipe.fit(X_train, y_train)
+        if fairness_group_values is not None:
+            sw = compute_sample_weights_from_groups(
+                groups=fairness_group_values[train_idx],
+                eligible_groups=fairness_groups,
+                others_weight=fairness_others_weight,
+            )
+            pipe.fit(X_train, y_train, clf__sample_weight=sw)
+        else:
+            pipe.fit(X_train, y_train)
         proba = pipe.predict_proba(X_val)[:, 1]
         m = eval_metrics(y_val, proba, groups = g_va)
 
@@ -150,12 +167,39 @@ def main() -> None:
     ap.add_argument("--n-trials", type=int, default=30,
                     help="Optuna trials per model.")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--fair-train", action="store_true", help="Enable fairness-aware sample weighting in HPO.")
+    ap.add_argument("--fair-group-col", default="ClientGender", help="Demographic group column used for fairness weights.")
+    ap.add_argument(
+        "--fair-groups",
+        default="Male,Female,Unisex",
+        help="Comma-separated groups to balance with inverse-frequency weighting.",
+    )
+    ap.add_argument("--fair-others-weight", type=float, default=1.0, help="Weight assigned to non-target groups.")
     args = ap.parse_args()
 
     # Load data once
     train = load_split("train")
     val = load_split("val")
     test = load_split("test")
+
+    fairness_group_values: np.ndarray | None = None
+    fairness_groups: list[str] | None = None
+    sample_weight_tr: np.ndarray | None = None
+    if args.fair_train:
+        fairness_groups = [s.strip() for s in args.fair_groups.split(",") if s.strip()]
+        cg = load_client_groups(group_col=args.fair_group_col)
+        train = attach_client_groups(train, cg, args.fair_group_col)
+        fairness_group_values = train[args.fair_group_col].astype(str).to_numpy()
+        sample_weight_tr = compute_sample_weights(
+            train,
+            group_col=args.fair_group_col,
+            eligible_groups=fairness_groups if fairness_groups else None,
+            others_weight=args.fair_others_weight,
+        )
+        print(
+            f"[fair-train] enabled | group_col={args.fair_group_col} | "
+            f"groups={fairness_groups} | mean_w={float(np.mean(sample_weight_tr)):.4f}"
+        )
 
     # Features: same selector used by baselines / feature_selection
     select_features = get_feature_selector()
@@ -174,7 +218,18 @@ def main() -> None:
         # Create & run study
         study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=args.seed))
         study.optimize(
-            lambda t: _cv_objective(t, model_name, X_tr, y_tr, g_tr, metric=args.metric, random_state=args.seed),
+            lambda t: _cv_objective(
+                t,
+                model_name,
+                X_tr,
+                y_tr,
+                g_tr,
+                metric=args.metric,
+                random_state=args.seed,
+                fairness_group_values=fairness_group_values,
+                fairness_groups=fairness_groups,
+                fairness_others_weight=args.fair_others_weight,
+            ),
             n_trials=args.n_trials,
             show_progress_bar=False,
         )
@@ -186,7 +241,10 @@ def main() -> None:
         # Refit on full train, evaluate on val & test
         pipe = make_pipeline_by_name(model_name, feat_cols, y_train=y_tr)
         pipe.set_params(**best_set_params)
-        pipe.fit(X_tr, y_tr)
+        if sample_weight_tr is not None:
+            pipe.fit(X_tr, y_tr, clf__sample_weight=sample_weight_tr)
+        else:
+            pipe.fit(X_tr, y_tr)
 
         proba_va = pipe.predict_proba(X_va)[:, 1]
         m_val = eval_metrics(y_va, proba_va, g_va)

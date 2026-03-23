@@ -23,6 +23,7 @@ from sklearn.metrics import (
     precision_recall_curve,
     roc_auc_score,
 )
+from src.fairness.training import attach_client_groups, compute_sample_weights, load_client_groups
 
 ROOT = Path(__file__).resolve().parents[2]
 PROC = ROOT / "data" / "processed"
@@ -322,9 +323,13 @@ def fit_and_score(
         X_val : np.ndarray,
         y_val : np.ndarray,
         groups_val: np.ndarray,
+        sample_weight_train: np.ndarray | None = None,
 ) -> Dict[str, float]:
     """ Fit the pipeline and return evaluation metrics on validation set."""
-    pipe.fit(X_train, y_train)
+    if sample_weight_train is not None:
+        pipe.fit(X_train, y_train, clf__sample_weight=sample_weight_train)
+    else:
+        pipe.fit(X_train, y_train)
     proba = pipe.predict_proba(X_val)[:, 1]
     m = eval_metrics(y_val, proba, groups_val)
     m["model"] = name
@@ -338,12 +343,36 @@ def main() -> None:
     ap.add_argument("--metric", default="pr_auc", choices=["pr_auc", "roc_auc", "map@10", "recall@10"],
                     help="Model selection metric on validation.")
     ap.add_argument("--save-name", default="best_baseline.pkl", help="Filename for the best model.")
+    ap.add_argument("--fair-train", action="store_true", help="Enable fairness-aware sample weighting in training.")
+    ap.add_argument("--fair-group-col", default="ClientGender", help="Demographic group column used for fairness weights.")
+    ap.add_argument(
+        "--fair-groups",
+        default="Male,Female,Unisex",
+        help="Comma-separated groups to balance with inverse-frequency weighting.",
+    )
+    ap.add_argument("--fair-others-weight", type=float, default=1.0, help="Weight assigned to non-target groups.")
     args = ap.parse_args()
 
     # Load splits
     train = load_split("train")
     val = load_split("val")
     test = load_split("test")
+
+    sample_weight_tr: np.ndarray | None = None
+    if args.fair_train:
+        fair_groups = [s.strip() for s in args.fair_groups.split(",") if s.strip()]
+        cg = load_client_groups(group_col=args.fair_group_col)
+        train = attach_client_groups(train, cg, args.fair_group_col)
+        sample_weight_tr = compute_sample_weights(
+            train,
+            group_col=args.fair_group_col,
+            eligible_groups=fair_groups if fair_groups else None,
+            others_weight=args.fair_others_weight,
+        )
+        print(
+            f"[fair-train] enabled | group_col={args.fair_group_col} | "
+            f"groups={fair_groups} | mean_w={float(np.mean(sample_weight_tr)):.4f}"
+        )
 
     # Features/labels
     feat_cols = _select_features(train)
@@ -367,7 +396,9 @@ def main() -> None:
             print(f"[skip] {name}: library not installed.")
             continue
         print(f"[fit] {name} …")
-        m, fitted_pipe = fit_and_score(name, pipe, X_tr, y_tr, X_va, y_va, g_va)
+        m, fitted_pipe = fit_and_score(
+            name, pipe, X_tr, y_tr, X_va, y_va, g_va, sample_weight_train=sample_weight_tr
+        )
         results.append(m)
         fitted[name] = fitted_pipe
         print(f"       val metrics: {json.dumps(m, indent=2)}")
