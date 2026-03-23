@@ -10,6 +10,10 @@ import numpy as np
 import optuna as optuna
 from joblib import dump
 from sklearn.model_selection import GroupKFold
+try:
+    import mlflow
+except Exception:
+    mlflow = None
 
 from src.models.train_baselines import (
     load_split,
@@ -38,6 +42,22 @@ REPORTS.mkdir(parents=True, exist_ok=True)
 MODELS.mkdir(parents=True, exist_ok=True)
 
 LEADERBOARD = REPORTS / "baseline_val_metrics.csv"
+
+
+def _mlflow_safe_metric_name(name: str) -> str:
+    return name.replace("@", "_at_")
+
+
+def _setup_mlflow(args) -> bool:
+    if not args.mlflow:
+        return False
+    if mlflow is None:
+        print("[mlflow] disabled: mlflow package not installed.")
+        return False
+    if args.mlflow_tracking_uri:
+        mlflow.set_tracking_uri(args.mlflow_tracking_uri)
+    mlflow.set_experiment(args.mlflow_experiment)
+    return True
 
 # ----------------------------------------------------------------------
 # Utility Functions
@@ -175,7 +195,12 @@ def main() -> None:
         help="Comma-separated groups to balance with inverse-frequency weighting.",
     )
     ap.add_argument("--fair-others-weight", type=float, default=1.0, help="Weight assigned to non-target groups.")
+    ap.add_argument("--mlflow", action="store_true", help="Enable MLflow tracking.")
+    ap.add_argument("--mlflow-experiment", default="FairAffinity-HPO", help="MLflow experiment name.")
+    ap.add_argument("--mlflow-tracking-uri", default=None, help="Optional MLflow tracking URI.")
+    ap.add_argument("--mlflow-run-name", default=None, help="Optional parent run name.")
     args = ap.parse_args()
+    mlflow_enabled = _setup_mlflow(args)
 
     # Load data once
     train = load_split("train")
@@ -212,79 +237,143 @@ def main() -> None:
     model_names = _pick_models(args.top_n, metric=args.metric)
     all_results = []
 
-    for model_name in model_names:
-        print(f"[hpo] model={model_name} | metric={args.metric} | trials={args.n_trials}")
+    parent_ctx = mlflow.start_run(run_name=args.mlflow_run_name) if mlflow_enabled else None
+    try:
+        if mlflow_enabled:
+            mlflow.log_params(
+                {
+                    "metric": args.metric,
+                    "top_n": args.top_n,
+                    "n_trials": args.n_trials,
+                    "seed": args.seed,
+                    "fair_train": args.fair_train,
+                    "fair_group_col": args.fair_group_col,
+                    "fair_groups": args.fair_groups,
+                    "fair_others_weight": args.fair_others_weight,
+                }
+            )
 
-        # Create & run study
-        study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=args.seed))
-        study.optimize(
-            lambda t: _cv_objective(
-                t,
-                model_name,
-                X_tr,
-                y_tr,
-                g_tr,
-                metric=args.metric,
-                random_state=args.seed,
-                fairness_group_values=fairness_group_values,
-                fairness_groups=fairness_groups,
-                fairness_others_weight=args.fair_others_weight,
-            ),
-            n_trials=args.n_trials,
-            show_progress_bar=False,
-        )
+        for model_name in model_names:
+            print(f"[hpo] model={model_name} | metric={args.metric} | trials={args.n_trials}")
 
-        best_params = study.best_trial.params
-        # Translate best trial params to pipeline set_params dict
-        best_set_params = _suggest_params(study.best_trial, model_name, y_tr)
+            try:
+                _ = make_pipeline_by_name(model_name, feat_cols, y_train=y_tr)
+            except Exception as e:
+                print(f"[hpo][skip] {model_name}: {e}")
+                continue
 
-        # Refit on full train, evaluate on val & test
-        pipe = make_pipeline_by_name(model_name, feat_cols, y_train=y_tr)
-        pipe.set_params(**best_set_params)
-        if sample_weight_tr is not None:
-            pipe.fit(X_tr, y_tr, clf__sample_weight=sample_weight_tr)
-        else:
-            pipe.fit(X_tr, y_tr)
+            child_ctx = (
+                mlflow.start_run(run_name=f"hpo_{model_name}", nested=True) if mlflow_enabled else None
+            )
+            try:
+                # Create & run study
+                study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=args.seed))
+                study.optimize(
+                    lambda t: _cv_objective(
+                        t,
+                        model_name,
+                        X_tr,
+                        y_tr,
+                        g_tr,
+                        metric=args.metric,
+                        random_state=args.seed,
+                        fairness_group_values=fairness_group_values,
+                        fairness_groups=fairness_groups,
+                        fairness_others_weight=args.fair_others_weight,
+                    ),
+                    n_trials=args.n_trials,
+                    show_progress_bar=False,
+                )
 
-        proba_va = pipe.predict_proba(X_va)[:, 1]
-        m_val = eval_metrics(y_va, proba_va, g_va)
-        m_val["model"] = model_name
-        m_val["split"] = "val"
+                best_params = study.best_trial.params
+                # Translate best trial params to pipeline set_params dict
+                best_set_params = _suggest_params(study.best_trial, model_name, y_tr)
 
-        proba_te = pipe.predict_proba(X_te)[:, 1]
-        m_test = eval_metrics(y_te, proba_te, g_te)
-        m_test["model"] = model_name
-        m_test["split"] = "test"
+                # Refit on full train, evaluate on val & test
+                pipe = make_pipeline_by_name(model_name, feat_cols, y_train=y_tr)
+                pipe.set_params(**best_set_params)
+                if sample_weight_tr is not None:
+                    pipe.fit(X_tr, y_tr, clf__sample_weight=sample_weight_tr)
+                else:
+                    pipe.fit(X_tr, y_tr)
 
-        # Persist artifacts
-        # 1) study summary
-        study_df = study.trials_dataframe()
-        study_csv = REPORTS / f"hpo_{model_name}_trials.csv"
-        study_df.to_csv(study_csv, index=False)
+                proba_va = pipe.predict_proba(X_va)[:, 1]
+                m_val = eval_metrics(y_va, proba_va, g_va)
+                m_val["model"] = model_name
+                m_val["split"] = "val"
 
-        # 2) best params
-        params_json = REPORTS / f"hpo_{model_name}_best_params.json"
-        params_json.write_text(json.dumps(best_params, indent=2))
+                proba_te = pipe.predict_proba(X_te)[:, 1]
+                m_test = eval_metrics(y_te, proba_te, g_te)
+                m_test["model"] = model_name
+                m_test["split"] = "test"
 
-        # 3) fitted model
-        model_pkl = MODELS / f"hpo_{model_name}.pkl"
-        dump(pipe, model_pkl)
+                # Persist artifacts
+                # 1) study summary
+                study_df = study.trials_dataframe()
+                study_csv = REPORTS / f"hpo_{model_name}_trials.csv"
+                study_df.to_csv(study_csv, index=False)
 
-        # 4) metrics
-        out_json = REPORTS / f"hpo_{model_name}_metrics.json"
-        out_json.write_text(json.dumps({"val": m_val, "test": m_test, "best_params": best_params}, indent=2))
+                # 2) best params
+                params_json = REPORTS / f"hpo_{model_name}_best_params.json"
+                params_json.write_text(json.dumps(best_params, indent=2))
 
-        print(f"[hpo][{model_name}] best trial value={study.best_value:.6f} | saved → {model_pkl.name}")
-        print(f"[hpo][{model_name}] val={m_val[args.metric]:.6f} | test={m_test[args.metric]:.6f}")
+                # 3) fitted model
+                model_pkl = MODELS / f"hpo_{model_name}.pkl"
+                dump(pipe, model_pkl)
 
-        all_results.append({"model": model_name, **{f"val_{k}": v for k, v in m_val.items() if k not in ("model", "split")},
-                            **{f"test_{k}": v for k, v in m_test.items() if k not in ("model", "split")}})
+                # 4) metrics
+                out_json = REPORTS / f"hpo_{model_name}_metrics.json"
+                out_json.write_text(json.dumps({"val": m_val, "test": m_test, "best_params": best_params}, indent=2))
 
-    # Leader table for HPO results
-    if all_results:
-        hpo_board = pd.DataFrame(all_results)
-        hpo_board.to_csv(REPORTS / "hpo_summary.csv", index=False)
-        print(f"[hpo] wrote leaderboard → {REPORTS / 'hpo_summary.csv'}")
+                print(f"[hpo][{model_name}] best trial value={study.best_value:.6f} | saved → {model_pkl.name}")
+                print(f"[hpo][{model_name}] val={m_val[args.metric]:.6f} | test={m_test[args.metric]:.6f}")
+
+                all_results.append(
+                    {
+                        "model": model_name,
+                        **{f"val_{k}": v for k, v in m_val.items() if k not in ("model", "split")},
+                        **{f"test_{k}": v for k, v in m_test.items() if k not in ("model", "split")},
+                    }
+                )
+                if mlflow_enabled:
+                    try:
+                        mlflow.log_metric("best_trial_value", float(study.best_value))
+                        mlflow.log_metrics(
+                            {
+                                _mlflow_safe_metric_name(f"val_{k}"): float(v)
+                                for k, v in m_val.items()
+                                if k not in ("model", "split")
+                            }
+                        )
+                        mlflow.log_metrics(
+                            {
+                                _mlflow_safe_metric_name(f"test_{k}"): float(v)
+                                for k, v in m_test.items()
+                                if k not in ("model", "split")
+                            }
+                        )
+                        mlflow.log_params({f"best_{k}": v for k, v in best_params.items()})
+                        mlflow.log_artifact(str(study_csv))
+                        mlflow.log_artifact(str(params_json))
+                        mlflow.log_artifact(str(out_json))
+                        mlflow.log_artifact(str(model_pkl))
+                    except Exception as e:
+                        print(f"[mlflow][warn] model={model_name}: {e}")
+            finally:
+                if child_ctx is not None:
+                    mlflow.end_run()
+
+        # Leader table for HPO results
+        if all_results:
+            hpo_board = pd.DataFrame(all_results)
+            out_board = REPORTS / "hpo_summary.csv"
+            hpo_board.to_csv(out_board, index=False)
+            print(f"[hpo] wrote leaderboard → {out_board}")
+            if mlflow_enabled:
+                mlflow.log_artifact(str(out_board))
+    finally:
+        if parent_ctx is not None:
+            mlflow.end_run()
 
 
 if __name__ == "__main__":

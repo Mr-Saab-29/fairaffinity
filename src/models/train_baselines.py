@@ -15,8 +15,14 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-import xgboost as xgb
-import lightgbm as lgb
+try:
+    import xgboost as xgb
+except Exception:
+    xgb = None
+try:
+    import lightgbm as lgb
+except Exception:
+    lgb = None
 from sklearn.metrics import (
     average_precision_score,
     log_loss,
@@ -192,6 +198,8 @@ def make_rf_pipeline(num_cols : List[str]) -> Pipeline:
 
 def make_xgb_pipeline(num_cols : List[str], y_train : np.ndarray) -> Pipeline:
     """ XGBoost with basic preprocessing."""
+    if xgb is None:
+        return None
     pre = ColumnTransformer(
         transformers = [("num", SimpleImputer(strategy="median"), num_cols)],
         remainder="drop",
@@ -213,6 +221,8 @@ def make_xgb_pipeline(num_cols : List[str], y_train : np.ndarray) -> Pipeline:
 
 def make_lgbm_pipeline(num_cols : List[str], y_train : np.ndarray) -> Pipeline:
     """ LightGBM with basic preprocessing."""
+    if lgb is None:
+        return None
     pre = ColumnTransformer(
         transformers = [("num", SimpleImputer(strategy="median"), num_cols)],
         remainder="drop",
@@ -258,10 +268,13 @@ def make_pipeline_by_name(name: str, num_cols: list[str], y_train=None):
     builder = MODEL_REGISTRY[name]
     try:
         # prefer signature (num_cols, y_train) when provided
-        return builder(num_cols, y_train)  # xgb/lgbm path
+        pipe = builder(num_cols, y_train)  # xgb/lgbm path
     except TypeError:
         # fall back to (num_cols) for models that don't take y_train
-        return builder(num_cols)
+        pipe = builder(num_cols)
+    if pipe is None:
+        raise RuntimeError(f"Model '{name}' is unavailable (optional dependency missing).")
+    return pipe
 
 def read_baseline_leaderboard(report_path: Path) -> pd.DataFrame:
     """Read the CSV leaderboard written by this script."""
