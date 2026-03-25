@@ -197,6 +197,63 @@ def _filter_similar_to_seed(recs: pd.DataFrame, seed_pid: int, catalog: pd.DataF
     return recs
 
 
+def _get_product_recs_cached(
+    seed_pid: int,
+    top_n: int,
+    catalog: pd.DataFrame,
+    by_user: dict[int, set[int]],
+    by_product: dict[int, set[int]],
+) -> pd.DataFrame:
+    cache = st.session_state.setdefault("cache_product_recs", {})
+    key = (int(seed_pid), int(top_n))
+    if key in cache:
+        return cache[key].copy()
+    recs = _recommend_from_product(seed_pid, by_user, by_product, top_n=200)
+    recs = _enrich_with_catalog(recs, catalog)
+    recs = _filter_similar_to_seed(recs, seed_pid, catalog).head(top_n)
+    cache[key] = recs.copy()
+    return recs
+
+
+def _get_category_recs_cached(
+    seed_category: str,
+    top_n: int,
+    interactions: pd.DataFrame,
+    catalog: pd.DataFrame,
+    by_user: dict[int, set[int]],
+    by_product: dict[int, set[int]],
+) -> pd.DataFrame:
+    cache = st.session_state.setdefault("cache_category_recs", {})
+    key = (str(seed_category), int(top_n))
+    if key in cache:
+        return cache[key].copy()
+    recs = _recommend_from_category(seed_category, interactions, by_user, by_product, top_n=top_n)
+    recs = _enrich_with_catalog(recs, catalog)
+    cache[key] = recs.copy()
+    return recs
+
+
+def _get_related_recs_cached(
+    cart_ids: list[int],
+    catalog: pd.DataFrame,
+    by_user: dict[int, set[int]],
+    by_product: dict[int, set[int]],
+) -> pd.DataFrame:
+    cache = st.session_state.setdefault("cache_related_recs", {})
+    key = tuple(sorted(int(x) for x in cart_ids))
+    if key in cache:
+        return cache[key].copy()
+    related = _cart_related_items(cart_ids, by_user, by_product, top_n=12)
+    related = _enrich_with_catalog(related, catalog)
+    if cart_ids:
+        cart_categories = set(catalog.loc[catalog["ProductID"].isin(cart_ids), "Category"].astype(str))
+        same_cart_categories = related[related["Category"].astype(str).isin(cart_categories)]
+        if not same_cart_categories.empty:
+            related = same_cart_categories.head(12)
+    cache[key] = related.copy()
+    return related
+
+
 st.set_page_config(page_title="SportsLand", layout="wide")
 st.title("SportsLand")
 st.caption("Pick products you like and discover related items.")
@@ -257,9 +314,7 @@ with tabs[0]:
             format_func=lambda pid: pid_to_label.get(int(pid), str(pid)),
         )
         top_n = st.slider("Number of recommendations", min_value=6, max_value=24, value=12, step=1, key="p_topn")
-        recs = _recommend_from_product(selected_pid, by_user, by_product, top_n=200)
-        recs = _enrich_with_catalog(recs, catalog)
-        recs = _filter_similar_to_seed(recs, selected_pid, catalog).head(top_n)
+        recs = _get_product_recs_cached(selected_pid, top_n, catalog, by_user, by_product)
         recs["Why this is recommended"] = "Frequently bought together with your selected product."
         _render_product_cards(recs, key_prefix="prod")
 
@@ -268,18 +323,11 @@ with tabs[1]:
     categories = sorted(catalog["Category"].dropna().astype(str).unique().tolist())
     selected_category = st.selectbox("Choose a category", options=categories, index=0)
     top_n_cat = st.slider("Number of recommendations", min_value=6, max_value=24, value=12, step=1, key="c_topn")
-    recs_cat = _recommend_from_category(selected_category, interactions, by_user, by_product, top_n=top_n_cat)
-    recs_cat = _enrich_with_catalog(recs_cat, catalog)
+    recs_cat = _get_category_recs_cached(selected_category, top_n_cat, interactions, catalog, by_user, by_product)
     recs_cat["Why this is recommended"] = f"Popular among shoppers browsing {selected_category}."
     _render_product_cards(recs_cat, key_prefix="cat")
 
 st.subheader("Related Items for Your Cart")
-related = _cart_related_items(st.session_state["cart"], by_user, by_product, top_n=12)
-related = _enrich_with_catalog(related, catalog)
-if st.session_state["cart"]:
-    cart_categories = set(catalog.loc[catalog["ProductID"].isin(st.session_state["cart"]), "Category"].astype(str))
-    same_cart_categories = related[related["Category"].astype(str).isin(cart_categories)]
-    if not same_cart_categories.empty:
-        related = same_cart_categories.head(12)
+related = _get_related_recs_cached(st.session_state["cart"], catalog, by_user, by_product)
 related["Why this is recommended"] = "Matches the items currently in your cart."
 _render_product_cards(related, key_prefix="cart")
