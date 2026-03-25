@@ -76,3 +76,33 @@ We ensure:
 
 📜 License
 This project is for educational and demonstration purposes.
+
+## Packaging & Deployment (Local)
+
+### API (FastAPI)
+Run locally:
+```bash
+uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Main endpoints:
+- `GET /health`
+- `GET /artifacts/recommendations`
+- `POST /recommend/run`
+- `POST /evaluate/run`
+
+### Dashboard (Streamlit)
+Run locally:
+```bash
+streamlit run dashboards/app.py
+```
+
+### Docker
+Build and run API + dashboard:
+```bash
+docker compose up --build
+```
+
+Services:
+- API: `http://localhost:8000`
+- Dashboard: `http://localhost:8501`
