@@ -106,3 +106,16 @@ docker compose up --build
 Services:
 - API: `http://localhost:8000`
 - Dashboard: `http://localhost:8501`
+
+## CI/CD (GitHub Actions)
+
+A workflow is included at `.github/workflows/ci-cd.yml` with:
+- Python 3.11 dependency install
+- Python bytecode compile checks for `src`, `dashboards`, `tests`
+- `pytest -q` test run
+- Docker build validation (`docker build`) and compose validation (`docker compose config`)
+
+It runs on:
+- Pull requests
+- Push to `main`/`master`
+- Manual trigger (`workflow_dispatch`)
