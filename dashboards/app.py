@@ -34,8 +34,12 @@ def _load_interactions() -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def _build_catalog(df: pd.DataFrame) -> pd.DataFrame:
+    base = df.copy()
+    base["ProductID"] = pd.to_numeric(base["ProductID"], errors="coerce")
+    base = base.dropna(subset=["ProductID"]).copy()
+    base["ProductID"] = base["ProductID"].astype(int)
     cat = (
-        df.groupby("ProductID", as_index=False)
+        base.groupby("ProductID", as_index=False)
         .agg(
             Category=("Category", "last"),
             FamilyLevel1=("FamilyLevel1", "last"),
@@ -44,7 +48,6 @@ def _build_catalog(df: pd.DataFrame) -> pd.DataFrame:
         )
         .fillna("UNKNOWN")
     )
-    cat["ProductID"] = cat["ProductID"].astype(int)
     cat["ProductName"] = (
         cat["Category"].astype(str)
         + " · "
@@ -62,8 +65,12 @@ def _build_catalog(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def _build_maps(df: pd.DataFrame) -> tuple[dict[int, set[int]], dict[int, set[int]]]:
-    by_user = df.groupby("ClientID")["ProductID"].apply(lambda s: set(s.astype(int))).to_dict()
-    by_product = df.groupby("ProductID")["ClientID"].apply(lambda s: set(s.astype(int))).to_dict()
+    base = df.copy()
+    base["ProductID"] = pd.to_numeric(base["ProductID"], errors="coerce")
+    base = base.dropna(subset=["ProductID"]).copy()
+    base["ProductID"] = base["ProductID"].astype(int)
+    by_user = base.groupby("ClientID")["ProductID"].apply(lambda s: set(s.astype(int))).to_dict()
+    by_product = base.groupby("ProductID")["ClientID"].apply(lambda s: set(s.astype(int))).to_dict()
     return by_user, by_product
 
 
@@ -236,6 +243,7 @@ def _get_category_recs_cached(
 def _get_related_recs_cached(
     cart_ids: list[int],
     catalog: pd.DataFrame,
+    interactions: pd.DataFrame,
     by_user: dict[int, set[int]],
     by_product: dict[int, set[int]],
 ) -> pd.DataFrame:
@@ -244,12 +252,29 @@ def _get_related_recs_cached(
     if key in cache:
         return cache[key].copy()
     related = _cart_related_items(cart_ids, by_user, by_product, top_n=12)
+    valid_ids = set(catalog["ProductID"].astype(int).unique().tolist())
+    related = related[related["ProductID"].astype(int).isin(valid_ids)].copy()
     related = _enrich_with_catalog(related, catalog)
     if cart_ids:
         cart_categories = set(catalog.loc[catalog["ProductID"].isin(cart_ids), "Category"].astype(str))
         same_cart_categories = related[related["Category"].astype(str).isin(cart_categories)]
         if not same_cart_categories.empty:
             related = same_cart_categories.head(12)
+        if related.empty and cart_categories:
+            pop = (
+                interactions[interactions["Category"].astype(str).isin(cart_categories)]
+                .copy()
+                .assign(ProductID=lambda d: pd.to_numeric(d["ProductID"], errors="coerce"))
+                .dropna(subset=["ProductID"])
+            )
+            pop["ProductID"] = pop["ProductID"].astype(int)
+            pop = (
+                pop.groupby("ProductID", as_index=False)
+                .agg(_score=("ClientID", "count"), _co_users=("ClientID", "nunique"))
+                .sort_values(["_score", "_co_users"], ascending=[False, False])
+            )
+            pop = pop[~pop["ProductID"].isin(set(int(x) for x in cart_ids))].head(12)
+            related = _enrich_with_catalog(pop, catalog)
     cache[key] = related.copy()
     return related
 
@@ -328,6 +353,6 @@ with tabs[1]:
     _render_product_cards(recs_cat, key_prefix="cat")
 
 st.subheader("Related Items for Your Cart")
-related = _get_related_recs_cached(st.session_state["cart"], catalog, by_user, by_product)
+related = _get_related_recs_cached(st.session_state["cart"], catalog, interactions, by_user, by_product)
 related["Why this is recommended"] = "Matches the items currently in your cart."
 _render_product_cards(related, key_prefix="cart")
