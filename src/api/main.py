@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from src.eval.recommendation_eval import compare_base_vs_fair, save_comparison_report
+from src.monitoring.service import (
+    build_and_save_monitoring_snapshot,
+    log_api_request,
+    monitoring_summary,
+    recommendation_drift_summary,
+)
 from src.recommender.pipeline import HybridWeights, run_recommendation_pipeline
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +27,24 @@ app = FastAPI(
     description="Fairness-aware recommendation and offline evaluation service.",
     version="1.0.0",
 )
+
+
+@app.middleware("http")
+async def request_timing_middleware(request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    latency_ms = (time.perf_counter() - start) * 1000.0
+    try:
+        log_api_request(
+            path=request.url.path,
+            method=request.method,
+            status_code=response.status_code,
+            latency_ms=latency_ms,
+        )
+    except Exception:
+        # Monitoring should never break serving path.
+        pass
+    return response
 
 
 class RecommendRequest(BaseModel):
@@ -65,6 +90,21 @@ def list_recommendation_artifacts(limit: int = 100) -> dict:
             if p.is_file()
         ]
     }
+
+
+@app.get("/monitoring/summary")
+def monitoring(window_hours: int = 24) -> dict:
+    return {
+        "status": "ok",
+        "api": monitoring_summary(window_hours=window_hours),
+        "recommendation_drift": recommendation_drift_summary(),
+    }
+
+
+@app.post("/monitoring/snapshot")
+def monitoring_snapshot(window_hours: int = 24) -> dict:
+    path = build_and_save_monitoring_snapshot(window_hours=window_hours)
+    return {"status": "ok", "snapshot_path": str(path)}
 
 
 @app.post("/recommend/run")
@@ -132,4 +172,3 @@ def run_evaluate(request: EvaluateRequest) -> dict:
         "json_path": str(json_path),
         "csv_path": str(csv_path),
     }
-

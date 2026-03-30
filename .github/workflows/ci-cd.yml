@@ -34,6 +34,14 @@ jobs:
         run: |
           python -m compileall -q src dashboards tests
 
+      - name: Data quality gates (if artifacts available)
+        run: |
+          if [ -f data/processed/interactions.parquet ] || [ -f data/processed/interactions_collapsed_c_p_d_s.parquet ]; then
+            python -m src.cli.data_quality_gates --stage ci --strict
+          else
+            echo "Skipping data quality gates: no processed artifacts in CI workspace."
+          fi
+
       - name: Unit tests
         run: pytest -q
 

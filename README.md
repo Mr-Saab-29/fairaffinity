@@ -112,6 +112,7 @@ Services:
 A workflow is included at `.github/workflows/ci-cd.yml` with:
 - Python 3.11 dependency install
 - Python bytecode compile checks for `src`, `dashboards`, `tests`
+- Data-quality gates (when processed artifacts are available)
 - `pytest -q` test run
 - Docker build validation (`docker build`) and compose validation (`docker compose config`)
 
@@ -119,3 +120,45 @@ It runs on:
 - Pull requests
 - Push to `main`/`master`
 - Manual trigger (`workflow_dispatch`)
+
+## MLOps Workflow
+
+### 1) Run End-to-End Orchestration
+```bash
+python -m src.cli.orchestrate_pipeline --promote --mlflow
+```
+
+This executes:
+- ingestion + canonical/interactions validation
+- feature generation + quality gates
+- label sampling + HPO retraining (fairness-aware)
+- model registry update + optional promotion
+- val/test recommendations + offline evaluation
+- governance artifact generation
+
+### 2) Data Quality Gates (standalone)
+```bash
+python -m src.cli.data_quality_gates --stage full --strict
+```
+
+### 3) Model Registry & Promotion (standalone)
+```bash
+python -m src.cli.model_registry --metric pr_auc --promote --min-val-pr-auc 0.90
+```
+
+### 4) Monitoring Snapshot
+```bash
+python -m src.cli.monitoring_snapshot --window-hours 24
+```
+
+API monitoring endpoints:
+- `GET /monitoring/summary`
+- `POST /monitoring/snapshot`
+
+### 5) Retraining Policy
+```bash
+python -m src.cli.retrain_policy
+```
+
+Scheduled policy workflow:
+- `.github/workflows/retrain-policy.yml` (weekly Monday 05:00 UTC + manual trigger)
